@@ -62,12 +62,18 @@ const RADII  = [0, 16, 30, 50];   // por tamaño 1, 2, 3
 const SPEEDS = [0, 85, 55, 32];   // velocidad base por tamaño
 const POINTS = [0, 100, 50, 20];  // puntos por tamaño
 
+// Estrella fugaz (asteroide especial)
+const ESTRELLA_SPEED  = 260;   // px/s — mucho más rápido que cualquier asteroide
+const ESTRELLA_TTL    = 7;     // segundos de vida antes de esfumarse
+const ESTRELLA_PUNTOS = 150;
+
 class Asteroid {
   constructor(x, y, size = 3) {
     this.x    = x;
     this.y    = y;
     this.size = size;
     this.radius = RADII[size];
+    this.points = POINTS[size];
     this.dead = false;
 
     const angle = rand(0, Math.PI * 2);
@@ -114,6 +120,57 @@ class Asteroid {
       ctx.lineTo(this.verts[i][0], this.verts[i][1]);
     ctx.closePath();
     ctx.stroke();
+    ctx.restore();
+  }
+}
+
+// ── Estrella fugaz ────────────────────────────────────────────────────────────
+// Asteroide especial: va muchísimo más rápido, no gira ni se parte,
+// y se esfuma sola cuando se agota su tiempo de vida (ttl).
+class EstrellaFugaz extends Asteroid {
+  constructor(x, y) {
+    super(x, y, 1);
+    this.radius = 11;
+    this.points = ESTRELLA_PUNTOS;
+    this.ttl    = ESTRELLA_TTL;
+
+    const angle = rand(0, Math.PI * 2);
+    const speed = ESTRELLA_SPEED + rand(-30, 30);
+    this.vx = Math.cos(angle) * speed;
+    this.vy = Math.sin(angle) * speed;
+    this.rotSpeed = 0;   // una estrella fugaz no rota
+  }
+
+  update(dt) {
+    super.update(dt);
+    this.ttl -= dt;
+    if (this.ttl <= 0) this.dead = true;
+  }
+
+  draw() {
+    // Parpadeo de aviso durante sus últimos 2 segundos
+    if (this.ttl < 2 && Math.floor(this.ttl * 8) % 2 === 0) return;
+
+    ctx.save();
+    ctx.translate(this.x, this.y);
+
+    // Estela apuntando en contra de su velocidad
+    const tail = 26;
+    const sp   = Math.hypot(this.vx, this.vy) || 1;
+    ctx.strokeStyle = 'rgba(255, 235, 150, 0.5)';
+    ctx.lineWidth   = 1.5;
+    ctx.lineCap     = 'round';
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(-this.vx / sp * tail, -this.vy / sp * tail);
+    ctx.stroke();
+
+    // Núcleo brillante
+    ctx.fillStyle = '#ffe99a';
+    ctx.beginPath();
+    ctx.arc(0, 0, 3.5, 0, Math.PI * 2);
+    ctx.fill();
+
     ctx.restore();
   }
 }
@@ -294,17 +351,29 @@ let ship, bullets, asteroids, particles, powerUps;
 let score, lives, level;
 let state;      // 'playing' | 'dead' | 'gameover'
 let deadTimer;
+let estrellaTimer;   // cuenta atrás para que aparezca la siguiente estrella fugaz
+
+function posicionSegura() {
+  // Punto aleatorio que no quede demasiado cerca de la nave
+  const SAFE_DIST = 130;
+  let x, y;
+  do {
+    x = rand(0, W);
+    y = rand(0, H);
+  } while (Math.hypot(x - ship.x, y - ship.y) < SAFE_DIST);
+  return { x, y };
+}
 
 function spawnAsteroids(count) {
-  const SAFE_DIST = 130;
   for (let i = 0; i < count; i++) {
-    let x, y;
-    do {
-      x = rand(0, W);
-      y = rand(0, H);
-    } while (Math.hypot(x - W / 2, y - H / 2) < SAFE_DIST);
+    const { x, y } = posicionSegura();
     asteroids.push(new Asteroid(x, y, 3));
   }
+}
+
+function spawnEstrella() {
+  const { x, y } = posicionSegura();
+  asteroids.push(new EstrellaFugaz(x, y));
 }
 
 function initGame() {
@@ -318,6 +387,7 @@ function initGame() {
   level  = 1;
   state  = 'playing';
   spawnAsteroids(4);
+  estrellaTimer = rand(6, 10);
 }
 
 function nextLevel() {
@@ -327,6 +397,7 @@ function nextLevel() {
   powerUps  = [];
   ship.reset();
   spawnAsteroids(3 + level);
+  estrellaTimer = rand(6, 10);
 }
 
 function explode(x, y, count = 8) {
@@ -371,6 +442,17 @@ function update(dt) {
     bullets.push(...ship.tryShoot());
   }
 
+  // Aparición periódica de la estrella fugaz
+  estrellaTimer -= dt;
+  if (estrellaTimer <= 0) {
+    if (asteroids.some(a => a instanceof EstrellaFugaz)) {
+      estrellaTimer = 2;   // ya hay una activa; reintentar en breve
+    } else {
+      spawnEstrella();
+      estrellaTimer = rand(8, 14);
+    }
+  }
+
   ship.update(dt);
   bullets.forEach(b => b.update(dt));
   asteroids.forEach(a => a.update(dt));
@@ -388,7 +470,7 @@ function update(dt) {
       if (!a.dead && !b.dead && dist(b, a) < a.radius) {
         b.dead = true;
         a.dead = true;
-        score += POINTS[a.size];
+        score += a.points;
         explode(a.x, a.y, a.size * 5);
         newAsteroids.push(...a.split());
 
